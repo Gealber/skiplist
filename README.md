@@ -8,7 +8,7 @@ A skip list is a probabilistic data structure that keeps keys sorted and support
 
 - Generic over key and value types via a user-supplied `compareFn`
 - Upsert (`put`), lookup (`get`), deletion (`delete`), and range iteration (`iterate`)
-- Thread-safe: a spinlock guards all mutations and the iterator holds the lock until `deinit` is called
+- Thread-safe: a readers-writer lock (`std.Io.RwLock`) allows concurrent reads; the iterator holds a shared read lock until `deinit` is called
 - Up to 32 levels, promotion probability p = 0.5
 
 ## Usage
@@ -21,12 +21,11 @@ fn compareI32(a: i32, b: i32) std.math.Order {
     return std.math.order(a, b);
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
 
     var prng = std.Random.DefaultPrng.init(0);
-    var sl = try SkipList(i32, []const u8, compareI32).init(gpa.allocator(), prng.random());
+    var sl = try SkipList(i32, []const u8, compareI32).init(init.gpa, io, prng.random());
     defer sl.deinit();
 
     try sl.put(1, "one");
@@ -36,11 +35,11 @@ pub fn main() !void {
     const v = try sl.get(2); // "two"
     _ = v;
 
-    sl.delete(1);
+    try sl.delete(1);
 
     // Iterate from key 2 onward
-    var it = sl.iterate(2);
-    defer it.deinit(); // releases the lock
+    var it = try sl.iterate(2);
+    defer it.deinit(); // releases the read lock
     while (it.next()) |entry| {
         _ = entry.key;
         _ = entry.value;
@@ -52,12 +51,12 @@ pub fn main() !void {
 
 | Function | Description |
 |---|---|
-| `init(allocator, rng)` | Create a new skip list. The `rng` must outlive the list. |
-| `deinit()` | Free all nodes. |
-| `put(key, value)` | Insert or update a key. |
-| `get(key)` | Return the value or `error.KeyNotFound`. |
-| `delete(key)` | Remove a key; no-op if absent. |
-| `iterate(start)` | Return an `Iterator` starting at the first key >= `start`. Call `it.deinit()` when done. |
+| `init(allocator, io, rng)` | Create a new skip list. The `rng` must outlive the list. |
+| `deinit()` | Free all nodes. Caller must ensure no concurrent access. |
+| `put(key, value) !void` | Insert or update a key. |
+| `get(key) !V` | Return the value or `error.KeyNotFound`. |
+| `delete(key) !void` | Remove a key; no-op if absent. |
+| `iterate(start) !Iterator` | Return an `Iterator` starting at the first key >= `start`. Call `it.deinit()` when done to release the read lock. |
 
 ## Running tests
 

@@ -21,19 +21,6 @@ fn randomLvl(rng: std.Random) usize {
 //  L1: head ───────────────► [10] ──────────► [30] ───────────► [50] ──► nil
 //                             │               │                 │
 //  L0: head ──► [5] ────────► [10] ──► [20] ──► [30] ──► [40] ──► [50] ──► [55] ──► nil
-// std.Thread.RwLock does not exist in Zig 0.16; std.atomic.Mutex is a spinlock
-// with only tryLock/unlock, so we wrap it to add a blocking lock().
-const Mutex = struct {
-    inner: std.atomic.Mutex = .unlocked,
-
-    fn lock(m: *Mutex) void {
-        while (!m.inner.tryLock()) {}
-    }
-
-    fn unlock(m: *Mutex) void {
-        m.inner.unlock();
-    }
-};
 
 fn SkipList(
     comptime K: type,
@@ -54,10 +41,11 @@ fn SkipList(
         level: usize,
         allocator: Allocator,
         rng: std.Random,
-        lock: Mutex = .{},
+        rw: std.Io.RwLock = .init,
+        io: std.Io,
 
         // rng must outlive the SkipList (std.Random holds a pointer into the PRNG state).
-        fn init(allocator: Allocator, rng: std.Random) !Self {
+        fn init(allocator: Allocator, io: std.Io, rng: std.Random) !Self {
             const head = try allocator.create(Node);
             head.next = try allocator.alloc(?*Node, maxLevel);
             @memset(head.next, null);
@@ -70,6 +58,7 @@ fn SkipList(
                 .length = 0,
                 .allocator = allocator,
                 .rng = rng,
+                .io = io,
             };
         }
 
@@ -87,8 +76,8 @@ fn SkipList(
 
         // put upserts a key on the skip list.
         pub fn put(sl: *Self, key: K, value: V) !void {
-            sl.lock.lock();
-            defer sl.lock.unlock();
+            try sl.rw.lock(sl.io);
+            defer sl.rw.unlock(sl.io);
 
             var update: [maxLevel]*Node = undefined;
             // try to find element, and keep track of levels boundaries
@@ -120,6 +109,8 @@ fn SkipList(
             }
 
             const new_node = try sl.allocator.create(Node);
+            errdefer sl.allocator.destroy(new_node);
+
             new_node.key = key;
             new_node.value = value;
             new_node.next = try sl.allocator.alloc(?*Node, newLvl);
@@ -133,9 +124,9 @@ fn SkipList(
         }
 
         // get performs search of a single key returning its value or KeyNotFound.
-        pub fn get(sl: *Self, key: K) error{KeyNotFound}!V {
-            sl.lock.lock();
-            defer sl.lock.unlock();
+        pub fn get(sl: *Self, key: K) !V {
+            try sl.rw.lockShared(sl.io);
+            defer sl.rw.unlockShared(sl.io);
 
             var cur = sl.head;
             for (0..sl.level) |j| {
@@ -155,9 +146,9 @@ fn SkipList(
 
         // delete removes a key from the skip list, freeing its node.
         // Does nothing if the key is not present.
-        pub fn delete(sl: *Self, key: K) void {
-            sl.lock.lock();
-            defer sl.lock.unlock();
+        pub fn delete(sl: *Self, key: K) !void {
+            try sl.rw.lock(sl.io);
+            defer sl.rw.unlock(sl.io);
 
             var update: [maxLevel]*Node = undefined;
             // try to find element, and keep track of levels boundaries
@@ -192,7 +183,8 @@ fn SkipList(
 
         pub const Iterator = struct {
             cur: ?*Node,
-            lock: *Mutex,
+            rw: *std.Io.RwLock,
+            io: std.Io,
 
             pub fn next(it: *Iterator) ?struct { key: K, value: V } {
                 const n = it.cur orelse return null;
@@ -202,14 +194,14 @@ fn SkipList(
 
             // Must be called when done iterating, even if not fully exhausted.
             pub fn deinit(it: *Iterator) void {
-                it.lock.unlock();
+                it.rw.unlockShared(it.io);
             }
         };
 
         // iterate returns an Iterator starting at the first key >= start.
         // The caller must call it.deinit() when done to release the read lock.
-        pub fn iterate(sl: *Self, start: K) Iterator {
-            sl.lock.lock();
+        pub fn iterate(sl: *Self, start: K) !Iterator {
+            try sl.rw.lockShared(sl.io);
 
             var cur = sl.head;
             for (0..sl.level) |j| {
@@ -219,7 +211,7 @@ fn SkipList(
                 }
             }
 
-            return Iterator{ .cur = cur.next[0], .lock = &sl.lock };
+            return Iterator{ .cur = cur.next[0], .rw = &sl.rw, .io = sl.io };
         }
     };
 }
@@ -232,7 +224,7 @@ const StringSkipList = SkipList([]const u8, []const u8, compareStr);
 
 test "put and get" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("hello", "world");
@@ -241,7 +233,7 @@ test "put and get" {
 
 test "update existing key" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("key", "first");
@@ -251,7 +243,7 @@ test "update existing key" {
 
 test "key not found" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try std.testing.expectError(error.KeyNotFound, sl.get("missing"));
@@ -259,7 +251,7 @@ test "key not found" {
 
 test "multiple keys inserted out of order" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("c", "3");
@@ -274,14 +266,14 @@ test "multiple keys inserted out of order" {
 
 test "delete existing key" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("a", "1");
     try sl.put("b", "2");
     try sl.put("c", "3");
 
-    sl.delete("b");
+    try sl.delete("b");
 
     try std.testing.expectEqualStrings("1", try sl.get("a"));
     try std.testing.expectError(error.KeyNotFound, sl.get("b"));
@@ -291,25 +283,25 @@ test "delete existing key" {
 
 test "delete missing key does nothing" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("a", "1");
-    sl.delete("z");
+    try sl.delete("z");
     try std.testing.expectEqualStrings("1", try sl.get("a"));
     try std.testing.expectEqual(1, sl.length);
 }
 
 test "iterate from start key" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("a", "1");
     try sl.put("b", "2");
     try sl.put("c", "3");
 
-    var it = sl.iterate("b");
+    var it = try sl.iterate("b");
     defer it.deinit();
     const first = it.next().?;
     try std.testing.expectEqualStrings("b", first.key);
@@ -322,12 +314,12 @@ test "iterate from start key" {
 
 test "iterate past end returns empty" {
     var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
     defer sl.deinit();
 
     try sl.put("a", "1");
 
-    var it = sl.iterate("z");
+    var it = try sl.iterate("z");
     defer it.deinit();
     try std.testing.expect(it.next() == null);
 }
