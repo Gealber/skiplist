@@ -24,8 +24,7 @@ fn compareI32(a: i32, b: i32) std.math.Order {
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
-    var prng = std.Random.DefaultPrng.init(0);
-    var sl = try SkipList(i32, []const u8, compareI32).init(init.gpa, io, prng.random());
+    var sl = try SkipList(i32, []const u8, compareI32).init(init.gpa, io, 0);
     defer sl.deinit();
 
     try sl.put(1, "one");
@@ -51,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
 
 | Function | Description |
 |---|---|
-| `init(allocator, io, rng)` | Create a new skip list. The `rng` must outlive the list. |
+| `init(allocator, io, seed)` | Create a new skip list seeded with `seed: u64`. The PRNG is owned by the list. |
 | `deinit()` | Free all nodes. Caller must ensure no concurrent access. |
 | `put(key, value) !void` | Insert or update a key. |
 | `get(key) !V` | Return the value or `error.KeyNotFound`. |

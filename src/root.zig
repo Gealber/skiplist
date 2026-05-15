@@ -40,12 +40,11 @@ pub fn SkipList(
         length: usize,
         level: usize,
         allocator: Allocator,
-        rng: std.Random,
+        prng: std.Random.DefaultPrng,
         rw: std.Io.RwLock = .init,
         io: std.Io,
 
-        // rng must outlive the SkipList (std.Random holds a pointer into the PRNG state).
-        pub fn init(allocator: Allocator, io: std.Io, rng: std.Random) !Self {
+        pub fn init(allocator: Allocator, io: std.Io, seed: u64) !Self {
             const head = try allocator.create(Node);
             head.next = try allocator.alloc(?*Node, maxLevel);
             @memset(head.next, null);
@@ -57,7 +56,7 @@ pub fn SkipList(
                 .level = 1,
                 .length = 0,
                 .allocator = allocator,
-                .rng = rng,
+                .prng = std.Random.DefaultPrng.init(seed),
                 .io = io,
             };
         }
@@ -98,7 +97,7 @@ pub fn SkipList(
                 return;
             }
 
-            const newLvl = randomLvl(sl.rng);
+            const newLvl = randomLvl(sl.prng.random());
             if (newLvl > sl.level) {
                 // initialize non existing levels
                 for (sl.level..newLvl) |i| {
@@ -223,8 +222,7 @@ fn compareStr(a: []const u8, b: []const u8) std.math.Order {
 const StringSkipList = SkipList([]const u8, []const u8, compareStr);
 
 test "put and get" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("hello", "world");
@@ -232,8 +230,7 @@ test "put and get" {
 }
 
 test "update existing key" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("key", "first");
@@ -242,16 +239,14 @@ test "update existing key" {
 }
 
 test "key not found" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try std.testing.expectError(error.KeyNotFound, sl.get("missing"));
 }
 
 test "multiple keys inserted out of order" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("c", "3");
@@ -265,8 +260,7 @@ test "multiple keys inserted out of order" {
 }
 
 test "delete existing key" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("a", "1");
@@ -282,8 +276,7 @@ test "delete existing key" {
 }
 
 test "delete missing key does nothing" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("a", "1");
@@ -293,8 +286,7 @@ test "delete missing key does nothing" {
 }
 
 test "iterate from start key" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("a", "1");
@@ -313,8 +305,7 @@ test "iterate from start key" {
 }
 
 test "iterate past end returns empty" {
-    var prng = std.Random.DefaultPrng.init(42);
-    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, prng.random());
+    var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
     try sl.put("a", "1");
