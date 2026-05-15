@@ -22,7 +22,7 @@ fn randomLvl(rng: std.Random) usize {
 //                             │               │                 │
 //  L0: head ──► [5] ────────► [10] ──► [20] ──► [30] ──► [40] ──► [50] ──► [55] ──► nil
 
-fn SkipList(
+pub fn SkipList(
     comptime K: type,
     comptime V: type,
     comptime compareFn: fn (K, K) std.math.Order,
@@ -45,7 +45,7 @@ fn SkipList(
         io: std.Io,
 
         // rng must outlive the SkipList (std.Random holds a pointer into the PRNG state).
-        fn init(allocator: Allocator, io: std.Io, rng: std.Random) !Self {
+        pub fn init(allocator: Allocator, io: std.Io, rng: std.Random) !Self {
             const head = try allocator.create(Node);
             head.next = try allocator.alloc(?*Node, maxLevel);
             @memset(head.next, null);
