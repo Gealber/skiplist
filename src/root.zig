@@ -74,7 +74,8 @@ pub fn SkipList(
         }
 
         // put upserts a key on the skip list.
-        pub fn put(sl: *Self, key: K, value: V) !void {
+        // Returns the displaced value on update, null on insert.
+        pub fn put(sl: *Self, key: K, value: V) !?V {
             try sl.rw.lock(sl.io);
             defer sl.rw.unlock(sl.io);
 
@@ -93,8 +94,9 @@ pub fn SkipList(
             // if the key is already present we just update its value
             const candidate = cur.next[0];
             if (candidate != null and compareFn(candidate.?.key, key) == .eq) {
+                const old = candidate.?.value;
                 candidate.?.value = value;
-                return;
+                return old;
             }
 
             const newLvl = randomLvl(sl.prng.random());
@@ -120,6 +122,7 @@ pub fn SkipList(
                 update[i].next[i] = new_node;
             }
             sl.length += 1;
+            return null;
         }
 
         // get performs search of a single key returning its value or KeyNotFound.
@@ -225,7 +228,7 @@ test "put and get" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("hello", "world");
+    _ = try sl.put("hello", "world");
     try std.testing.expectEqualStrings("world", try sl.get("hello"));
 }
 
@@ -233,8 +236,9 @@ test "update existing key" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("key", "first");
-    try sl.put("key", "second");
+    _ = try sl.put("key", "first");
+    const old = try sl.put("key", "second");
+    try std.testing.expectEqualStrings("first", old.?);
     try std.testing.expectEqualStrings("second", try sl.get("key"));
 }
 
@@ -249,9 +253,9 @@ test "multiple keys inserted out of order" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("c", "3");
-    try sl.put("a", "1");
-    try sl.put("b", "2");
+    _ = try sl.put("c", "3");
+    _ = try sl.put("a", "1");
+    _ = try sl.put("b", "2");
 
     try std.testing.expectEqualStrings("1", try sl.get("a"));
     try std.testing.expectEqualStrings("2", try sl.get("b"));
@@ -263,9 +267,9 @@ test "delete existing key" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("a", "1");
-    try sl.put("b", "2");
-    try sl.put("c", "3");
+    _ = try sl.put("a", "1");
+    _ = try sl.put("b", "2");
+    _ = try sl.put("c", "3");
 
     try sl.delete("b");
 
@@ -279,7 +283,7 @@ test "delete missing key does nothing" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("a", "1");
+    _ = try sl.put("a", "1");
     try sl.delete("z");
     try std.testing.expectEqualStrings("1", try sl.get("a"));
     try std.testing.expectEqual(1, sl.length);
@@ -289,9 +293,9 @@ test "iterate from start key" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("a", "1");
-    try sl.put("b", "2");
-    try sl.put("c", "3");
+    _ = try sl.put("a", "1");
+    _ = try sl.put("b", "2");
+    _ = try sl.put("c", "3");
 
     var it = try sl.iterate("b");
     defer it.deinit();
@@ -308,7 +312,7 @@ test "iterate past end returns empty" {
     var sl = try StringSkipList.init(std.testing.allocator, std.testing.io, 42);
     defer sl.deinit();
 
-    try sl.put("a", "1");
+    _ = try sl.put("a", "1");
 
     var it = try sl.iterate("z");
     defer it.deinit();
